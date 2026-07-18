@@ -23,10 +23,22 @@ export class Go2RTCManager {
   private connectWatchdog: ReturnType<typeof setTimeout> | null = null
 
   /**
-   * @param {number} go2rtcPort - The port go2rtc is listening on
+   * @param {number | string} go2rtcTarget - The local port go2rtc is listening on (Electron-managed
+   * instance), or the base HTTP(S) URL of an external go2rtc server (e.g. 'https://host/go2rtc')
    * @param {string} streamName - The stream name registered in go2rtc
    */
-  constructor(private go2rtcPort: number, private streamName: string) {}
+  constructor(private go2rtcTarget: number | string, private streamName: string) {}
+
+  /**
+   * Build the WebSocket signaling base URL for the configured go2rtc target.
+   * A numeric target means the Electron-managed loopback instance; a string target is the base
+   * HTTP(S) URL of an external go2rtc server, converted to ws(s) with any trailing slash removed.
+   * @returns {string} The ws(s) base URL, without a path
+   */
+  private wsBaseUrl(): string {
+    if (typeof this.go2rtcTarget === 'number') return `ws://127.0.0.1:${this.go2rtcTarget}`
+    return this.go2rtcTarget.replace(/\/+$/, '').replace(/^http/, 'ws')
+  }
 
   /**
    * Start the WebRTC connection to go2rtc.
@@ -114,7 +126,7 @@ export class Go2RTCManager {
 
     this.armConnectWatchdog()
 
-    const wsUrl = `ws://127.0.0.1:${this.go2rtcPort}/api/ws?src=${encodeURIComponent(this.streamName)}`
+    const wsUrl = `${this.wsBaseUrl()}/api/ws?src=${encodeURIComponent(this.streamName)}`
     const ws = new WebSocket(wsUrl)
     this.ws = ws
 
