@@ -86,8 +86,13 @@ export const useVideoStore = defineStore('video', () => {
   )
   const rtspStreamsAvailable = computed(() => !!window.electronAPI || externalGo2RtcAvailable.value)
 
-  const registerStreamOnExternalGo2Rtc = async (streamName: string, rtspUrl: string): Promise<void> => {
-    const name = encodeURIComponent(streamName)
+  // go2rtc stream names become the WebSocket 'src' query param and a key in its config file, so a raw
+  // RTSP URL (with '://', ':' and '/') is a poor name. Derive a stable, filesystem/URL-safe name.
+  const go2rtcStreamNameFor = (streamName: string): string =>
+    `cockpit_${streamName.replace(/[^a-zA-Z0-9_-]/g, '_')}`.slice(0, 120)
+
+  const registerStreamOnExternalGo2Rtc = async (go2rtcName: string, rtspUrl: string): Promise<void> => {
+    const name = encodeURIComponent(go2rtcName)
     const src = encodeURIComponent(rtspUrl)
     const response = await fetch(`${externalGo2RtcBaseUrl.value}/api/streams?name=${name}&src=${src}`, {
       method: 'PUT',
@@ -97,8 +102,8 @@ export const useVideoStore = defineStore('video', () => {
     }
   }
 
-  const removeStreamFromExternalGo2Rtc = async (streamName: string): Promise<void> => {
-    const name = encodeURIComponent(streamName)
+  const removeStreamFromExternalGo2Rtc = async (go2rtcName: string): Promise<void> => {
+    const name = encodeURIComponent(go2rtcName)
     const response = await fetch(`${externalGo2RtcBaseUrl.value}/api/streams?name=${name}&src=`, { method: 'PUT' })
     if (!response.ok) {
       throw new Error(`External go2rtc server rejected stream removal (HTTP ${response.status}).`)
@@ -414,6 +419,7 @@ export const useVideoStore = defineStore('video', () => {
   }, 300)
 
   const rtspActivating = new Set<string>()
+  const rtspStartFailureWarned = new Set<string>()
   let rtspUnsupportedWarned = false
 
   /**
@@ -459,8 +465,9 @@ export const useVideoStore = defineStore('video', () => {
             await window.electronAPI.go2rtcAddStream(streamName, rtspUrl)
             manager = new Go2RTCManager(port, streamName)
           } else {
-            await registerStreamOnExternalGo2Rtc(streamName, rtspUrl)
-            manager = new Go2RTCManager(externalGo2RtcBaseUrl.value, streamName)
+            const go2rtcName = go2rtcStreamNameFor(streamName)
+            await registerStreamOnExternalGo2Rtc(go2rtcName, rtspUrl)
+            manager = new Go2RTCManager(externalGo2RtcBaseUrl.value, go2rtcName)
           }
           const { mediaStream, connected } = manager.start()
 
@@ -476,8 +483,16 @@ export const useVideoStore = defineStore('video', () => {
           }
           console.debug(`Activated RTSP stream '${streamName}' via go2rtc.`)
         } catch (error) {
+          // Activation is retried by the VideoPlayer's ~1s poll, so warn only once per stream per
+          // session — otherwise a persistent failure (e.g. server unreachable) spams modal dialogs.
           console.error(`Failed to activate RTSP stream '${streamName}':`, error)
-          showDialog({ message: `Failed to start RTSP stream '${streamName}'.`, variant: 'error' })
+          if (!rtspStartFailureWarned.has(streamName)) {
+            rtspStartFailureWarned.add(streamName)
+            showDialog({
+              message: `Failed to start RTSP stream '${streamName}': ${(error as Error).message}`,
+              variant: 'error',
+            })
+          }
         } finally {
           rtspActivating.delete(streamName)
         }
@@ -1222,7 +1237,7 @@ export const useVideoStore = defineStore('video', () => {
               console.warn(`Error removing go2rtc stream '${externalId}':`, error)
             })
           } else if (externalGo2RtcAvailable.value) {
-            void removeStreamFromExternalGo2Rtc(externalId).catch((error) => {
+            void removeStreamFromExternalGo2Rtc(go2rtcStreamNameFor(externalId)).catch((error) => {
               console.warn(`Error removing external go2rtc stream '${externalId}':`, error)
             })
           }
