@@ -713,7 +713,7 @@ const searchText = ref('')
 
 // Persisted opt-in for the keyboard virtual joystick. Kept in sync with the joystick manager, which
 // owns the key listeners and synthetic device.
-const keyboardJoystickEnabled = useBlueOsStorage('cockpit-keyboard-joystick-enabled', false)
+const keyboardJoystickEnabled = useBlueOsStorage('cockpit-keyboard-joystick-enabled', true)
 watch(keyboardJoystickEnabled, (enabled) => joystickManager.setKeyboardJoystickEnabled(enabled), { immediate: true })
 
 onMounted(async () => {

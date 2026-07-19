@@ -34,13 +34,14 @@ const keyboardStuckKeyMs = 150
 // would already be repeating and covered by the faster threshold above.
 const keyboardStuckKeyInitialMs = 700
 // Map of key codes to [axisIndex, direction] on the standard gamepad layout.
-// axis1 drives forward/back (mapped to MAVLink axis_x, +1 = forward), axis2 drives yaw
-// (mapped to axis_r, +1 = right). Up/W = +1 so forward matches the vehicle's forward.
+// axis1 = forward/back, axis2 = yaw. Up/W = -1 to match the gamepad convention (stick-up is
+// negative) and the rover default mapping's forward axis (A1, inverted range), so forward drives
+// the vehicle forward. Left/A = -1 (yaw left), Right/D = +1 (yaw right).
 const keyboardAxisBindings: Record<string, [number, number]> = {
-  ArrowUp: [1, 1],
-  KeyW: [1, 1],
-  ArrowDown: [1, -1],
-  KeyS: [1, -1],
+  ArrowUp: [1, -1],
+  KeyW: [1, -1],
+  ArrowDown: [1, 1],
+  KeyS: [1, 1],
   ArrowLeft: [2, -1],
   KeyA: [2, -1],
   ArrowRight: [2, 1],
@@ -487,7 +488,9 @@ class JoystickManager {
    * configuration page is opened) and reflects the setting even without that view mounted.
    */
   private syncKeyboardJoystickFromSettings(): void {
-    const enabled = settingsManager.getKeyValue('cockpit-keyboard-joystick-enabled') === true
+    // Enabled by default: absent setting (fresh install / cleared storage) means on, so the robot is
+    // drivable with no setup. Only an explicit `false` disables it.
+    const enabled = settingsManager.getKeyValue('cockpit-keyboard-joystick-enabled') !== false
     if (enabled !== this.keyboardEnabled) {
       this.setKeyboardJoystickEnabled(enabled)
     }
