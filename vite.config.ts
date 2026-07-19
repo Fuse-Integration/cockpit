@@ -46,9 +46,14 @@ const baseConfig = {
     vuetify({
       autoImport: true,
     }),
-    // Only include PWA plugin when NOT building the library
+    // Only include PWA plugin when NOT building the library.
+    // selfDestroying: this fork is served from a central VM for live demos, where the PWA's
+    // offline caching only causes stale-build confusion. A self-destroying service worker
+    // unregisters any previously-installed worker and clears its caches on next load, so every
+    // reload reflects the currently-deployed build.
     !isLibrary &&
       VitePWA({
+        selfDestroying: true,
         registerType: 'autoUpdate',
         devOptions: {
           enabled: true,
