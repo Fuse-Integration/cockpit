@@ -422,7 +422,10 @@ export const checkForOtherManualControlSources = async (vehicleAddress: string):
       for (const messageName of messageNames) {
         try {
           const endpoint = `${protocol}//${vehicleAddress}:6040/v1/mavlink/vehicles/255/components/${componentId}/messages/${messageName}`
-          const response = await fetch(endpoint)
+          // Short timeout: on non-BlueOS deployments this port is unreachable and an un-timed fetch
+          // hangs ~30s per attempt (4 per call), piling up pending connections and starving the main
+          // thread — which stalls the joystick drive loop. Fail fast instead.
+          const response = await fetch(endpoint, { signal: AbortSignal.timeout(2000) })
 
           if (!response.ok) continue
 
