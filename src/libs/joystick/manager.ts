@@ -23,15 +23,15 @@ const keyboardJoystickId = 'Cockpit Virtual Keyboard (STANDARD GAMEPAD)'
 // Ramp rates (units/second) so held keys accelerate smoothly and release decays quickly, giving
 // digital keys an analog-like feel. Emit rate is high enough for responsive control.
 const keyboardRampUpPerSec = 3
-const keyboardRampDownPerSec = 8
 const keyboardEmitIntervalMs = 50
 // Map of key codes to [axisIndex, direction] on the standard gamepad layout.
-// axis1 = left-stick Y (negative = forward/up), axis2 = right-stick X (positive = right/yaw-right).
+// axis1 drives forward/back (mapped to MAVLink axis_x, +1 = forward), axis2 drives yaw
+// (mapped to axis_r, +1 = right). Up/W = +1 so forward matches the vehicle's forward.
 const keyboardAxisBindings: Record<string, [number, number]> = {
-  ArrowUp: [1, -1],
-  KeyW: [1, -1],
-  ArrowDown: [1, 1],
-  KeyS: [1, 1],
+  ArrowUp: [1, 1],
+  KeyW: [1, 1],
+  ArrowDown: [1, -1],
+  KeyS: [1, -1],
   ArrowLeft: [2, -1],
   KeyA: [2, -1],
   ArrowRight: [2, 1],
@@ -787,11 +787,16 @@ class JoystickManager {
     let changed = false
     const next = this.keyboardAxes.map((cur, i) => {
       const target = targets[i]
-      const rate = Math.abs(target) < Math.abs(cur) || target * cur < 0 ? keyboardRampDownPerSec : keyboardRampUpPerSec
-      const step = rate * dt
-      let value = cur
-      if (Math.abs(target - cur) <= step) value = target
-      else value += Math.sign(target - cur) * step
+      // Snap straight to zero when the key is released: ramping down adds to the perceived
+      // stopping distance on top of the network round-trip. Ramp only when accelerating toward a
+      // held direction, for a smooth start.
+      let value: number
+      if (target === 0) {
+        value = 0
+      } else {
+        const step = keyboardRampUpPerSec * dt
+        value = Math.abs(target - cur) <= step ? target : cur + Math.sign(target - cur) * step
+      }
       if (value !== cur) changed = true
       return value
     })
