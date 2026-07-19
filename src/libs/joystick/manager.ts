@@ -693,12 +693,25 @@ class JoystickManager {
     this.keyboardAxes = [0, 0, 0, 0]
 
     this.keyboardKeyDownHandler = (e: KeyboardEvent) => {
-      if (!(e.code in keyboardAxisBindings)) return
+      const isStopKey = e.code === 'Space'
+      if (!isStopKey && !(e.code in keyboardAxisBindings)) return
       // Ignore when typing in an input/textarea so keyboard driving never hijacks form entry.
       const target = e.target as HTMLElement | null
       if (target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))) return
-      this.keyboardPressedKeys.add(e.code)
       e.preventDefault()
+      if (isStopKey) {
+        // Space is a hard stop: drop all held movement keys and snap axes to zero immediately,
+        // bypassing the ramp so the vehicle halts at once.
+        this.keyboardPressedKeys.clear()
+        this.keyboardAxes = [0, 0, 0, 0]
+        this.emitStateEvent({
+          index: keyboardJoystickIndex,
+          gamepad: this.buildKeyboardGamepad(),
+          calibratedState: this.buildCalibratedState([0, 0, 0, 0], [], JoystickModel.VirtualKeyboard),
+        })
+        return
+      }
+      this.keyboardPressedKeys.add(e.code)
     }
     this.keyboardKeyUpHandler = (e: KeyboardEvent) => {
       if (this.keyboardPressedKeys.delete(e.code)) e.preventDefault()

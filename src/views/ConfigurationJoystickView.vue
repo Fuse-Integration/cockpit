@@ -21,8 +21,9 @@
           <div class="flex flex-col">
             <span class="text-sm font-medium">Keyboard as virtual joystick</span>
             <span class="text-xs opacity-70">
-              Drive manual control with the arrow keys or WASD when no gamepad is available. Appears below as a
-              "Virtual Keyboard" controller — map its axes to vehicle functions like any joystick.
+              Drive manual control with the arrow keys or WASD when no gamepad is available, and Space for an
+              immediate stop. Appears below as a "Virtual Keyboard" controller — map its axes to vehicle functions
+              like any joystick.
             </span>
           </div>
           <v-switch v-model="keyboardJoystickEnabled" hide-details color="primary" density="compact" class="shrink-0" />
