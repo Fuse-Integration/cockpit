@@ -19,6 +19,9 @@ export const defaultMavProfileHash = '2309ffda-896a-449d-a171-7b7fdf80bc95'
 export const defaultProfileVehicleCorrespondency = {
   [MavType.MAV_TYPE_SUBMARINE]: defaultRovProfileHash,
   [MavType.MAV_TYPE_SURFACE_BOAT]: defaultBoatProfileHash,
+  // A ground rover is a surface, steering-based vehicle like a boat (no depth/altitude), so the
+  // boat profile — with its View Selector and Armer Button — is the closest sensible default.
+  [MavType.MAV_TYPE_GROUND_ROVER]: defaultBoatProfileHash,
   [MavType.MAV_TYPE_QUADROTOR]: defaultMavProfileHash,
 }
 
