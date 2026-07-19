@@ -305,8 +305,10 @@ class JoystickManager {
     // Seed the new subscriber with the current state. Connection events only fire on change, so a
     // component that mounts after a device connected (e.g. the keyboard virtual joystick, or a
     // gamepad connected earlier) would otherwise never learn about it and stay in a disconnected UI.
+    // Deferred to a macrotask so it never runs re-entrantly during the subscriber's own setup (which
+    // would abort a Pinia store mid-initialization when a device is already present).
     if (this.joysticks.size > 0) {
-      callback(this.joysticks)
+      setTimeout(() => callback(this.joysticks), 0)
     }
   }
 
