@@ -749,6 +749,12 @@ export const widgetProfiles: Profile[] = [
             name: 'Bottom-right container',
             widgets: [
               {
+                component: MiniWidgetType.JoystickCommIndicator,
+                name: 'JoystickCommIndicator',
+                options: {},
+                hash: 'b1f4c0a2-6d3e-4c7a-9f2b-2e8a1d5c7f90',
+              },
+              {
                 component: MiniWidgetType.ModeSelector,
                 name: 'ModeSelector',
                 options: {},
