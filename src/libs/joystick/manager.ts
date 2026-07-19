@@ -56,6 +56,12 @@ const keyboardAxisBindings: Record<string, [number, number]> = {
   KeyA: [2, -1],
   ArrowRight: [2, 1],
   KeyD: [2, 1],
+  // Camera gimbal (pan/tilt module): pan on axis 0, tilt on axis 3. The rover profile maps A0->axis_y
+  // and A3->axis_z, which the shim reads as gimbal pan/tilt rate. IJKL, mirroring WASD for driving.
+  KeyJ: [0, -1], // pan left
+  KeyL: [0, 1], //  pan right
+  KeyI: [3, 1], //  tilt up
+  KeyK: [3, -1], // tilt down
 }
 
 /**
