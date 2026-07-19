@@ -290,6 +290,12 @@ class JoystickManager {
    */
   onJoystickConnectionUpdate(callback: CallbackJoystickConnectionEventType): void {
     this.callbacksJoystickConnection.push(callback)
+    // Seed the new subscriber with the current state. Connection events only fire on change, so a
+    // component that mounts after a device connected (e.g. the keyboard virtual joystick, or a
+    // gamepad connected earlier) would otherwise never learn about it and stay in a disconnected UI.
+    if (this.joysticks.size > 0) {
+      callback(this.joysticks)
+    }
   }
 
   /**
