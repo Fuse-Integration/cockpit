@@ -108,6 +108,7 @@ export const cockpitStandardToProtocols: JoystickProtocolActionsMapping[] = [
       [JoystickAxis.A1]: { action: joystickInputAxes.axis_x, min: +1000, max: -1000 },
       [JoystickAxis.A2]: { action: joystickInputAxes.axis_r, min: -1000, max: +1000 },
       [JoystickAxis.A3]: { action: joystickInputAxes.axis_z, min: +1000, max: -1000 },
+      [JoystickAxis.A4]: { action: joystickInputAxes.axis_s, min: -1000, max: +1000 },
     },
     buttonsCorrespondencies: {
       [CockpitModifierKeyOption.regular]: {

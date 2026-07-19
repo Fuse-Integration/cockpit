@@ -60,8 +60,10 @@ const keyboardAxisBindings: Record<string, [number, number]> = {
   // and A3->axis_z, which the shim reads as gimbal pan/tilt rate. IJKL, mirroring WASD for driving.
   KeyJ: [0, -1], // pan left
   KeyL: [0, 1], //  pan right
-  KeyI: [3, 1], //  tilt up
-  KeyK: [3, -1], // tilt down
+  KeyI: [3, -1], // tilt up
+  KeyK: [3, 1], //  tilt down
+  // Camera recenter: axis 4 (-> MANUAL_CONTROL s via A4->axis_s); the shim snaps pan/tilt to 0.
+  KeyO: [4, 1], //  recenter gimbal
 }
 
 /**
@@ -262,7 +264,7 @@ class JoystickManager {
   private keyboardPressedKeys: Set<string> = new Set()
   private keyboardLastKeydown: Map<string, number> = new Map()
   private keyboardRepeating: Set<string> = new Set()
-  private keyboardAxes = [0, 0, 0, 0]
+  private keyboardAxes = [0, 0, 0, 0, 0]
   private keyboardEmitTimer: ReturnType<typeof setInterval> | null = null
   private keyboardLastTick = 0
   private keyboardZeroReemitTicksLeft = 0
@@ -729,7 +731,7 @@ class JoystickManager {
    */
   private attachKeyboardJoystick(): void {
     this.clearKeyboardKeys()
-    this.keyboardAxes = [0, 0, 0, 0]
+    this.keyboardAxes = [0, 0, 0, 0, 0]
 
     this.keyboardKeyDownHandler = (e: KeyboardEvent) => {
       const isStopKey = e.code === 'Space'
@@ -742,11 +744,11 @@ class JoystickManager {
         // Space is a hard stop: drop all held movement keys and snap axes to zero immediately,
         // bypassing the ramp so the vehicle halts at once.
         this.clearKeyboardKeys()
-        this.keyboardAxes = [0, 0, 0, 0]
+        this.keyboardAxes = [0, 0, 0, 0, 0]
         this.emitStateEvent({
           index: keyboardJoystickIndex,
           gamepad: this.buildKeyboardGamepad(),
-          calibratedState: this.buildCalibratedState([0, 0, 0, 0], [], JoystickModel.VirtualKeyboard),
+          calibratedState: this.buildCalibratedState([0, 0, 0, 0, 0], [], JoystickModel.VirtualKeyboard),
         })
         return
       }
@@ -812,12 +814,12 @@ class JoystickManager {
     }
 
     this.clearKeyboardKeys()
-    this.keyboardAxes = [0, 0, 0, 0]
+    this.keyboardAxes = [0, 0, 0, 0, 0]
     // Emit one final zeroed state so consumers stop the vehicle before the device disappears.
     this.emitStateEvent({
       index: keyboardJoystickIndex,
       gamepad: this.buildKeyboardGamepad(),
-      calibratedState: this.buildCalibratedState([0, 0, 0, 0], [], JoystickModel.VirtualKeyboard),
+      calibratedState: this.buildCalibratedState([0, 0, 0, 0, 0], [], JoystickModel.VirtualKeyboard),
     })
 
     this.joysticks.delete(keyboardJoystickIndex)
@@ -863,7 +865,7 @@ class JoystickManager {
 
     this.releaseStuckKeyboardKeys(now)
 
-    const targets = [0, 0, 0, 0]
+    const targets = [0, 0, 0, 0, 0]
     for (const code of this.keyboardPressedKeys) {
       const [axis, dir] = keyboardAxisBindings[code]
       targets[axis] += dir
