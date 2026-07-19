@@ -2,7 +2,6 @@ import vue from '@vitejs/plugin-vue'
 import path from 'path'
 import { defineConfig } from 'vite'
 import electron, { startup, treeKillSync } from 'vite-plugin-electron'
-import { VitePWA } from 'vite-plugin-pwa'
 import vuetify from 'vite-plugin-vuetify'
 
 import { getVersion } from './src/libs/non-browser-utils'
@@ -46,20 +45,11 @@ const baseConfig = {
     vuetify({
       autoImport: true,
     }),
-    // Only include PWA plugin when NOT building the library.
-    // selfDestroying: this fork is served from a central VM for live demos, where the PWA's
-    // offline caching only causes stale-build confusion. A self-destroying service worker
-    // unregisters any previously-installed worker and clears its caches on next load, so every
-    // reload reflects the currently-deployed build.
-    !isLibrary &&
-      VitePWA({
-        selfDestroying: true,
-        registerType: 'autoUpdate',
-        devOptions: {
-          enabled: true,
-        },
-        includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
-      }),
+    // PWA/service worker intentionally disabled for this fork. It is served from a central VM for
+    // live demos, so offline caching brings no benefit and the service worker caused stale-build
+    // confusion (and, with self-destroying + auto-update, reload loops). With no service worker,
+    // the browser's normal HTTP caching handles the content-hashed assets: unchanged files load
+    // from cache and only a changed bundle is re-fetched, so reloads are fast and always current.
   ].filter(Boolean),
   define: {
     'process.env': {},
