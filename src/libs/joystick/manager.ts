@@ -38,10 +38,10 @@ const keyboardStuckKeyInitialMs = 700
 // negative) and the rover default mapping's forward axis (A1, inverted range), so forward drives
 // the vehicle forward. Left/A = -1 (yaw left), Right/D = +1 (yaw right).
 const keyboardAxisBindings: Record<string, [number, number]> = {
-  ArrowUp: [1, -1],
-  KeyW: [1, -1],
-  ArrowDown: [1, 1],
-  KeyS: [1, 1],
+  ArrowUp: [1, 1],
+  KeyW: [1, 1],
+  ArrowDown: [1, -1],
+  KeyS: [1, -1],
   ArrowLeft: [2, -1],
   KeyA: [2, -1],
   ArrowRight: [2, 1],
@@ -738,11 +738,13 @@ class JoystickManager {
       if (this.keyboardPressedKeys.has(e.code)) this.keyboardRepeating.add(e.code)
       this.keyboardPressedKeys.add(e.code)
       this.keyboardLastKeydown.set(e.code, performance.now())
+      console.warn(`[kbd] ${performance.now().toFixed(0)} down ${e.code} repeat=${e.repeat}`)
     }
     this.keyboardKeyUpHandler = (e: KeyboardEvent) => {
       if (this.keyboardPressedKeys.delete(e.code)) e.preventDefault()
       this.keyboardRepeating.delete(e.code)
       this.keyboardLastKeydown.delete(e.code)
+      console.warn(`[kbd] ${performance.now().toFixed(0)} UP ${e.code}`)
     }
     // Releasing focus (alt-tab, clicking away) must stop the vehicle, matching gamepad safety.
     this.keyboardBlurHandler = () => this.clearKeyboardKeys()
@@ -812,6 +814,7 @@ class JoystickManager {
       const last = this.keyboardLastKeydown.get(code) ?? 0
       const threshold = this.keyboardRepeating.has(code) ? keyboardStuckKeyMs : keyboardStuckKeyInitialMs
       if (now - last > threshold) {
+        console.warn(`[kbd] ${now.toFixed(0)} WATCHDOG-RELEASE ${code} (idle ${(now - last).toFixed(0)}ms)`)
         this.keyboardPressedKeys.delete(code)
         this.keyboardRepeating.delete(code)
         this.keyboardLastKeydown.delete(code)
