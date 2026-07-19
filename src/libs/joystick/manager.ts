@@ -24,6 +24,15 @@ const keyboardJoystickId = 'Cockpit Virtual Keyboard (STANDARD GAMEPAD)'
 // digital keys an analog-like feel. Emit rate is high enough for responsive control.
 const keyboardRampUpPerSec = 3
 const keyboardEmitIntervalMs = 50
+// A held key fires keydown repeatedly (auto-repeat). If those repeats stop but no keyup arrived
+// (keyup can be missed/intercepted, leaving the axis stuck and the vehicle driving), auto-release
+// the key this long after its last keydown. Only applied once a key has actually repeated, so the
+// initial pre-repeat delay of a fresh press does not trigger a false release.
+const keyboardStuckKeyMs = 150
+// Backstop for keys that never repeated (a quick tap whose keyup was missed): release them once
+// they exceed the longest plausible OS auto-repeat delay, by which point a genuinely-held key
+// would already be repeating and covered by the faster threshold above.
+const keyboardStuckKeyInitialMs = 700
 // Map of key codes to [axisIndex, direction] on the standard gamepad layout.
 // axis1 drives forward/back (mapped to MAVLink axis_x, +1 = forward), axis2 drives yaw
 // (mapped to axis_r, +1 = right). Up/W = +1 so forward matches the vehicle's forward.
@@ -234,6 +243,8 @@ class JoystickManager {
   private calibrationOptions: Map<JoystickModel, JoystickCalibration> = new Map()
   private keyboardEnabled = false
   private keyboardPressedKeys: Set<string> = new Set()
+  private keyboardLastKeydown: Map<string, number> = new Map()
+  private keyboardRepeating: Set<string> = new Set()
   private keyboardAxes = [0, 0, 0, 0]
   private keyboardEmitTimer: ReturnType<typeof setInterval> | null = null
   private keyboardLastTick = 0
@@ -695,7 +706,7 @@ class JoystickManager {
    * Register the keyboard device, attach key listeners, and start the ramp/emit loop
    */
   private attachKeyboardJoystick(): void {
-    this.keyboardPressedKeys.clear()
+    this.clearKeyboardKeys()
     this.keyboardAxes = [0, 0, 0, 0]
 
     this.keyboardKeyDownHandler = (e: KeyboardEvent) => {
@@ -708,7 +719,7 @@ class JoystickManager {
       if (isStopKey) {
         // Space is a hard stop: drop all held movement keys and snap axes to zero immediately,
         // bypassing the ramp so the vehicle halts at once.
-        this.keyboardPressedKeys.clear()
+        this.clearKeyboardKeys()
         this.keyboardAxes = [0, 0, 0, 0]
         this.emitStateEvent({
           index: keyboardJoystickIndex,
@@ -717,13 +728,19 @@ class JoystickManager {
         })
         return
       }
+      // A keydown for an already-pressed key is the OS auto-repeat — mark it so the stuck-key
+      // watchdog can safely release it once repeats stop.
+      if (this.keyboardPressedKeys.has(e.code)) this.keyboardRepeating.add(e.code)
       this.keyboardPressedKeys.add(e.code)
+      this.keyboardLastKeydown.set(e.code, performance.now())
     }
     this.keyboardKeyUpHandler = (e: KeyboardEvent) => {
       if (this.keyboardPressedKeys.delete(e.code)) e.preventDefault()
+      this.keyboardRepeating.delete(e.code)
+      this.keyboardLastKeydown.delete(e.code)
     }
     // Releasing focus (alt-tab, clicking away) must stop the vehicle, matching gamepad safety.
-    this.keyboardBlurHandler = () => this.keyboardPressedKeys.clear()
+    this.keyboardBlurHandler = () => this.clearKeyboardKeys()
 
     window.addEventListener('keydown', this.keyboardKeyDownHandler)
     window.addEventListener('keyup', this.keyboardKeyUpHandler)
@@ -755,7 +772,7 @@ class JoystickManager {
       this.keyboardEmitTimer = null
     }
 
-    this.keyboardPressedKeys.clear()
+    this.clearKeyboardKeys()
     this.keyboardAxes = [0, 0, 0, 0]
     // Emit one final zeroed state so consumers stop the vehicle before the device disappears.
     this.emitStateEvent({
@@ -770,12 +787,42 @@ class JoystickManager {
   }
 
   /**
+   * Clear all keyboard key-tracking state (pressed, repeat, and last-keydown timers)
+   */
+  private clearKeyboardKeys(): void {
+    this.keyboardPressedKeys.clear()
+    this.keyboardRepeating.clear()
+    this.keyboardLastKeydown.clear()
+  }
+
+  /**
+   * Release keys that are stuck: a key that had been auto-repeating but whose repeats have stopped
+   * without a keyup (missed/intercepted keyup) would otherwise hold the axis and keep the vehicle
+   * moving. Only keys that have actually repeated are eligible, so a fresh press awaiting its first
+   * repeat is never falsely released.
+   * @param {number} now Current timestamp (performance.now)
+   */
+  private releaseStuckKeyboardKeys(now: number): void {
+    for (const code of [...this.keyboardPressedKeys]) {
+      const last = this.keyboardLastKeydown.get(code) ?? 0
+      const threshold = this.keyboardRepeating.has(code) ? keyboardStuckKeyMs : keyboardStuckKeyInitialMs
+      if (now - last > threshold) {
+        this.keyboardPressedKeys.delete(code)
+        this.keyboardRepeating.delete(code)
+        this.keyboardLastKeydown.delete(code)
+      }
+    }
+  }
+
+  /**
    * One ramp/emit tick: move each axis toward its target (held keys) and emit the state if changed
    */
   private tickKeyboardJoystick(): void {
     const now = performance.now()
     const dt = Math.min((now - this.keyboardLastTick) / 1000, 0.25)
     this.keyboardLastTick = now
+
+    this.releaseStuckKeyboardKeys(now)
 
     const targets = [0, 0, 0, 0]
     for (const code of this.keyboardPressedKeys) {
