@@ -14,6 +14,24 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Cockpit Lite</title>
     <meta name="description" content="An intuitive and customizable cross-platform ground control station for remote vehicles of all types.">
+    <script>
+        // follow-the-Caddy-login: seed Cockpit's synced-settings identity from the
+        // authenticated Caddy user, which the outer proxy exposes as the JS-readable
+        // `cockpit_authuser` cookie. Runs before the app bundle (a deferred module) so
+        // SettingsManager initialises under the right user and pulls that user's profile
+        // from the vehicle settings store. No-op when the cookie is absent (deployments
+        // that don't set it) or the identity is already set (returning browser).
+        (function () {
+            try {
+                var m = document.cookie.match(/(?:^|;\s*)cockpit_authuser=([^;]*)/);
+                var user = m ? decodeURIComponent(m[1]) : '';
+                if (user && user.length >= 3) {
+                    if (!localStorage.getItem('cockpit-username')) localStorage.setItem('cockpit-username', user);
+                    if (!localStorage.getItem('cockpit-last-connected-user')) localStorage.setItem('cockpit-last-connected-user', user);
+                }
+            } catch (e) { /* storage/cookies unavailable — fall back to the app default */ }
+        })();
+    </script>
     <style>
         #non-app-main {
             color: #fff;
