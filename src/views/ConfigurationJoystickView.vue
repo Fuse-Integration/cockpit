@@ -17,6 +17,17 @@
             import or export joystick configurations below.
           </p>
         </div>
+        <div class="flex items-center justify-between px-6 py-2 mb-1">
+          <div class="flex flex-col">
+            <span class="text-sm font-medium">Keyboard as virtual joystick</span>
+            <span class="text-xs opacity-70">
+              Drive manual control with the arrow keys or WASD when no gamepad is available, and Space for an
+              immediate stop. Appears below as a "Virtual Keyboard" controller — map its axes to vehicle functions
+              like any joystick.
+            </span>
+          </div>
+          <v-switch v-model="keyboardJoystickEnabled" hide-details color="primary" density="compact" class="shrink-0" />
+        </div>
         <div>
           <ExpansiblePanel no-top-divider no-bottom-divider :is-expanded="!interfaceStore.isOnPhoneScreen" compact>
             <template #title>General settings</template>
@@ -663,11 +674,12 @@ import InteractionDialog from '@/components/InteractionDialog.vue'
 import AxisVisualization from '@/components/joysticks/AxisVisualization.vue'
 import JoystickCalibration from '@/components/joysticks/JoystickCalibration.vue'
 import JoystickPS from '@/components/joysticks/JoystickPS.vue'
+import { useBlueOsStorage } from '@/composables/settingsSyncer'
 import { useSnackbar } from '@/composables/snackbar'
 import { getDataLakeVariableInfo } from '@/libs/actions/data-lake'
 import { getAllTransformingFunctions } from '@/libs/actions/data-lake-transformations'
 import { getArdupilotVersion, getMavlink2RestVersion } from '@/libs/blueos'
-import { JoystickModel } from '@/libs/joystick/manager'
+import { JoystickModel, joystickManager } from '@/libs/joystick/manager'
 import { MAVLinkButtonFunction } from '@/libs/joystick/protocols/mavlink-manual-control'
 import { modifierKeyActions } from '@/libs/joystick/protocols/other'
 import { mavlinkCameraFocusActionId, mavlinkCameraZoomActionId } from '@/libs/joystick/protocols/predefined-resources'
@@ -698,6 +710,11 @@ const { openSnackbar } = useSnackbar()
 
 const showJoystickWarningMessage = ref(false)
 const searchText = ref('')
+
+// Persisted opt-in for the keyboard virtual joystick. Kept in sync with the joystick manager, which
+// owns the key listeners and synthetic device.
+const keyboardJoystickEnabled = useBlueOsStorage('cockpit-keyboard-joystick-enabled', true)
+watch(keyboardJoystickEnabled, (enabled) => joystickManager.setKeyboardJoystickEnabled(enabled), { immediate: true })
 
 onMounted(async () => {
   controllerStore.enableForwarding = false

@@ -29,6 +29,41 @@
 
 ---
 
+## 🔀 About this fork (Fuse Integration)
+
+This fork adds features for centrally served web deployments, most notably **external go2rtc
+support**: the web build can delegate RTSP→WebRTC conversion to a
+[go2rtc](https://github.com/AlexxIT/go2rtc) server running elsewhere (upstream limits RTSP
+streams to the Electron app, which manages its own go2rtc sidecar).
+
+### Video setup with an external go2rtc server (web build)
+
+**Server prerequisites** — the go2rtc instance must:
+
+- be reachable from the browser over HTTPS/WSS when Cockpit itself is served over HTTPS
+  (e.g. reverse-proxy its API path, and expose its WebRTC media port with the public address
+  listed under `webrtc.candidates` in `go2rtc.yml`)
+- allow cross-origin API calls: `api.origin: "*"` in `go2rtc.yml`
+- have its config file mounted **read-write** — go2rtc rewrites it when Cockpit registers a
+  stream (a read-only mount surfaces as HTTP 400 on registration)
+
+**In Cockpit:**
+
+1. Open **Menu → Settings → Video**. Under **External go2rtc server**, enter the base URL
+   (e.g. `https://your-host/go2rtc`) and tick **Enable**.
+2. An **Add direct RTSP stream** field appears below. Enter the RTSP source URL (e.g.
+   `rtsp://camera-host:8554/stream`) and press **Add**. The URL is resolved by the go2rtc
+   *server*, not the browser, so internal/container hostnames are fine.
+3. The stream appears under **Streams mapping** with an RTSP badge; use the pencil icon to
+   rename its internal name.
+4. Put it on screen: **Menu → Edit interface**, add a **Video Player** widget, and select the
+   stream in the widget's configuration.
+
+Playback is then WebRTC end-to-end: Cockpit registers the RTSP URL with go2rtc over its HTTP
+API and consumes the stream through go2rtc's WebSocket signaling.
+
+---
+
 ## 🎯 What is Cockpit?
 
   <p><strong>An intuitive, customizable, and powerful ground control station software for remote vehicles of all types</strong></p>

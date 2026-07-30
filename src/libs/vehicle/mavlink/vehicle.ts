@@ -427,7 +427,13 @@ export abstract class MAVLinkVehicle<Modes> extends Vehicle.AbstractVehicle<Mode
         const heartbeat = mavlink_message.message as Message.Heartbeat
         this._dateLastHeartbeat = new Date()
 
-        this._isArmed = Boolean(heartbeat.base_mode.bits & MavModeFlag.MAV_MODE_FLAG_SAFETY_ARMED)
+        // mavlink2rest serializes the base_mode bitmask either as { bits: number } (BlueOS build) or
+        // as a flag string ("MAV_MODE_FLAG_SAFETY_ARMED | ...") on some standalone builds. Handle both.
+        const baseMode = heartbeat.base_mode as unknown as { bits?: number } | string
+        this._isArmed =
+          typeof baseMode === 'string'
+            ? baseMode.includes('MAV_MODE_FLAG_SAFETY_ARMED')
+            : Boolean((baseMode?.bits ?? 0) & MavModeFlag.MAV_MODE_FLAG_SAFETY_ARMED)
         this.onArm.emit()
         this._flying = heartbeat.system_status.type === MavState.MAV_STATE_ACTIVE
         this.onTakeoff.emit()

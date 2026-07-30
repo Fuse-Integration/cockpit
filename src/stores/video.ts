@@ -67,6 +67,48 @@ export const useVideoStore = defineStore('video', () => {
   const enableLiveProcessing = useBlueOsStorage('cockpit-enable-live-processing', true)
   const keepRawVideoChunksAsBackup = useBlueOsStorage('cockpit-keep-raw-video-chunks-as-backup', true)
   const userRestoredStreamIds = useBlueOsStorage<string[]>('cockpit-user-restored-stream-ids', [])
+  const externalGo2RtcServer = useBlueOsStorage<{
+    /**
+     * Base HTTP(S) URL of the external go2rtc server (e.g. 'https://host/go2rtc')
+     */
+    data: string
+    /**
+     * Whether the external go2rtc server should be used
+     */
+    enabled: boolean
+  }>('cockpit-external-go2rtc-server', { data: '', enabled: false })
+
+  const externalGo2RtcBaseUrl = computed(() => externalGo2RtcServer.value.data.trim().replace(/\/+$/, ''))
+  // RTSP consumption needs a go2rtc instance: the Electron-managed sidecar, or (in the web build)
+  // a user-configured external server that go2rtc-capable deployments expose (e.g. behind a reverse proxy).
+  const externalGo2RtcAvailable = computed(
+    () => externalGo2RtcServer.value.enabled && /^https?:\/\//.test(externalGo2RtcBaseUrl.value)
+  )
+  const rtspStreamsAvailable = computed(() => !!window.electronAPI || externalGo2RtcAvailable.value)
+
+  // go2rtc stream names become the WebSocket 'src' query param and a key in its config file, so a raw
+  // RTSP URL (with '://', ':' and '/') is a poor name. Derive a stable, filesystem/URL-safe name.
+  const go2rtcStreamNameFor = (streamName: string): string =>
+    `cockpit_${streamName.replace(/[^a-zA-Z0-9_-]/g, '_')}`.slice(0, 120)
+
+  const registerStreamOnExternalGo2Rtc = async (go2rtcName: string, rtspUrl: string): Promise<void> => {
+    const name = encodeURIComponent(go2rtcName)
+    const src = encodeURIComponent(rtspUrl)
+    const response = await fetch(`${externalGo2RtcBaseUrl.value}/api/streams?name=${name}&src=${src}`, {
+      method: 'PUT',
+    })
+    if (!response.ok) {
+      throw new Error(`External go2rtc server rejected stream registration (HTTP ${response.status}).`)
+    }
+  }
+
+  const removeStreamFromExternalGo2Rtc = async (go2rtcName: string): Promise<void> => {
+    const name = encodeURIComponent(go2rtcName)
+    const response = await fetch(`${externalGo2RtcBaseUrl.value}/api/streams?name=${name}&src=`, { method: 'PUT' })
+    if (!response.ok) {
+      throw new Error(`External go2rtc server rejected stream removal (HTTP ${response.status}).`)
+    }
+  }
   const recordingMonitors: { [key: string]: ReturnType<typeof setInterval> | undefined } = {}
   const suppressNotGrowingDialogs = ref(false)
 
@@ -243,7 +285,7 @@ export const useVideoStore = defineStore('video', () => {
   }
 
   const initializeRtspStreamsCorrespondency = (): void => {
-    if (!isElectron()) return
+    if (!isElectron() && !externalGo2RtcAvailable.value) return
 
     const allRtspSourceUrls: string[] = []
     for (const stream of streamInformation.value) {
@@ -377,6 +419,7 @@ export const useVideoStore = defineStore('video', () => {
   }, 300)
 
   const rtspActivating = new Set<string>()
+  const rtspStartFailureWarned = new Set<string>()
   let rtspUnsupportedWarned = false
 
   /**
@@ -395,7 +438,7 @@ export const useVideoStore = defineStore('video', () => {
         showDialog({ message: `RTSP URL for stream '${streamName}' is missing.`, variant: 'error' })
         return
       }
-      if (!window.electronAPI) {
+      if (!rtspStreamsAvailable.value) {
         // Activation is attempted repeatedly (e.g. via VideoPlayer's 1s polling), so guard the dialog
         // to a single notification per session to avoid spamming the user during boot.
         if (!rtspUnsupportedWarned) {
@@ -404,7 +447,8 @@ export const useVideoStore = defineStore('video', () => {
             message:
               'It looks like some of your video-related widgets (e.g.: video player, mini video recorder, snapshot tool)' +
               ' are connected to RTSP streams, which are not supported in Cockpit Lite. To make sure those widgets work,' +
-              ' re-configure them to only use WebRTC, or upgrade to Cockpit Standalone, which supports both WebRTC and RTSP streams.',
+              ' re-configure them to only use WebRTC, upgrade to Cockpit Standalone, or configure an external go2rtc' +
+              ' server in the video-configuration page.',
             variant: 'error',
           })
         }
@@ -415,10 +459,16 @@ export const useVideoStore = defineStore('video', () => {
 
       void (async () => {
         try {
-          const port = await window.electronAPI!.go2rtcGetPort()
-          await window.electronAPI!.go2rtcAddStream(streamName, rtspUrl)
-
-          const manager = new Go2RTCManager(port, streamName)
+          let manager: Go2RTCManager
+          if (window.electronAPI) {
+            const port = await window.electronAPI.go2rtcGetPort()
+            await window.electronAPI.go2rtcAddStream(streamName, rtspUrl)
+            manager = new Go2RTCManager(port, streamName)
+          } else {
+            const go2rtcName = go2rtcStreamNameFor(streamName)
+            await registerStreamOnExternalGo2Rtc(go2rtcName, rtspUrl)
+            manager = new Go2RTCManager(externalGo2RtcBaseUrl.value, go2rtcName)
+          }
           const { mediaStream, connected } = manager.start()
 
           activeStreams.value[streamName] = {
@@ -433,8 +483,16 @@ export const useVideoStore = defineStore('video', () => {
           }
           console.debug(`Activated RTSP stream '${streamName}' via go2rtc.`)
         } catch (error) {
+          // Activation is retried by the VideoPlayer's ~1s poll, so warn only once per stream per
+          // session — otherwise a persistent failure (e.g. server unreachable) spams modal dialogs.
           console.error(`Failed to activate RTSP stream '${streamName}':`, error)
-          showDialog({ message: `Failed to start RTSP stream '${streamName}'.`, variant: 'error' })
+          if (!rtspStartFailureWarned.has(streamName)) {
+            rtspStartFailureWarned.add(streamName)
+            showDialog({
+              message: `Failed to start RTSP stream '${streamName}': ${(error as Error).message}`,
+              variant: 'error',
+            })
+          }
         } finally {
           rtspActivating.delete(streamName)
         }
@@ -1178,6 +1236,10 @@ export const useVideoStore = defineStore('video', () => {
             void window.electronAPI.go2rtcRemoveStream(externalId).catch((error) => {
               console.warn(`Error removing go2rtc stream '${externalId}':`, error)
             })
+          } else if (externalGo2RtcAvailable.value) {
+            void removeStreamFromExternalGo2Rtc(go2rtcStreamNameFor(externalId)).catch((error) => {
+              console.warn(`Error removing external go2rtc stream '${externalId}':`, error)
+            })
           }
         }
 
@@ -1219,13 +1281,14 @@ export const useVideoStore = defineStore('video', () => {
   }
 
   /**
-   * Add a new RTSP stream to the correspondency list (Electron/standalone only)
+   * Add a new RTSP stream to the correspondency list (Cockpit Standalone, or web build with an
+   * external go2rtc server configured)
    * @param {string} rtspUrl - Full RTSP URL
    * @returns {VideoStreamCorrespondency} The created correspondency entry
    */
   const addRtspStreamCorrespondency = (rtspUrl: string): VideoStreamCorrespondency => {
-    if (!window.electronAPI) {
-      throw new Error('RTSP streams are only available in Cockpit Standalone.')
+    if (!rtspStreamsAvailable.value) {
+      throw new Error('RTSP streams require Cockpit Standalone or a configured external go2rtc server.')
     }
 
     let parsedUrl: URL
@@ -1280,6 +1343,9 @@ export const useVideoStore = defineStore('video', () => {
     availableIceIps,
     allowedIceIps,
     enableAutoIceIpFetch,
+    externalGo2RtcServer,
+    externalGo2RtcAvailable,
+    rtspStreamsAvailable,
     allowedIceProtocols,
     jitterBufferTarget,
     namesAvailableStreams,

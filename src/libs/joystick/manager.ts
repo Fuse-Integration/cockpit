@@ -16,6 +16,56 @@ export { JoystickModel }
 
 export const joystickCalibrationOptionsKey = 'cockpit-joystick-calibration-options'
 
+// Reserved index for the synthetic keyboard joystick. Physical gamepads use small indices (0-3),
+// so a high constant avoids any collision and lets us exempt it from the Gamepad-API cull.
+const keyboardJoystickIndex = 1000
+const keyboardJoystickId = 'Cockpit Virtual Keyboard (STANDARD GAMEPAD)'
+// Ramp rates (units/second) so held keys accelerate smoothly and release decays quickly, giving
+// digital keys an analog-like feel. Emit rate is high enough for responsive control.
+const keyboardRampUpPerSec = 3
+// Breakaway floor (normalized axis magnitude): on initial acceleration from rest, jump straight to
+// this value so the vehicle responds at once instead of crawling through sub-stiction ramp values
+// (which reads as a hesitation off the line). The ramp then continues from here up to full.
+const keyboardStartFloor = 0.5
+const keyboardEmitIntervalMs = 50
+// A held key fires keydown repeatedly (auto-repeat). If those repeats stop but no keyup arrived
+// (keyup can be missed/intercepted, leaving the axis stuck and the vehicle driving), auto-release
+// the key this long after its last keydown. Only applied once a key has actually repeated, so the
+// initial pre-repeat delay of a fresh press does not trigger a false release.
+const keyboardStuckKeyMs = 120
+// Backstop for keys that never repeated (a quick tap whose keyup was missed): release them once
+// they exceed the longest plausible OS auto-repeat delay, by which point a genuinely-held key
+// would already be repeating and covered by the faster threshold above.
+const keyboardStuckKeyInitialMs = 350
+// After the last key is released the axes snap to zero, but that single zero emit can be dropped
+// downstream (e.g. processJoystickStateEvent early-returns if the joystick is momentarily absent from
+// the store), which — because the tick then goes silent — latches the last non-zero value forever in
+// the blind 40ms MANUAL_CONTROL send loop. Re-emit the zero for this many ticks after release so a
+// dropped emit is resent, then go quiet so we don't fight other input sources.
+const keyboardZeroReemitTickCount = 12
+// Map of key codes to [axisIndex, direction] on the standard gamepad layout.
+// axis1 = forward/back, axis2 = yaw. Up/W = -1 to match the gamepad convention (stick-up is
+// negative) and the rover default mapping's forward axis (A1, inverted range), so forward drives
+// the vehicle forward. Left/A = -1 (yaw left), Right/D = +1 (yaw right).
+const keyboardAxisBindings: Record<string, [number, number]> = {
+  ArrowUp: [1, 1],
+  KeyW: [1, 1],
+  ArrowDown: [1, -1],
+  KeyS: [1, -1],
+  ArrowLeft: [2, -1],
+  KeyA: [2, -1],
+  ArrowRight: [2, 1],
+  KeyD: [2, 1],
+  // Camera gimbal (pan/tilt module): pan on axis 0, tilt on axis 3. The rover profile maps A0->axis_y
+  // and A3->axis_z, which the shim reads as gimbal pan/tilt rate. IJKL, mirroring WASD for driving.
+  KeyJ: [0, -1], // pan left
+  KeyL: [0, 1], //  pan right
+  KeyI: [3, -1], // tilt up
+  KeyK: [3, 1], //  tilt down
+  // Camera recenter: axis 4 (-> MANUAL_CONTROL s via A4->axis_s); the shim snaps pan/tilt to 0.
+  KeyO: [4, 1], //  recenter gimbal
+}
+
 /**
  * Possible events from GamepadListener
  * https://developer.mozilla.org/en-US/docs/Web/API/Gamepad_API/Using_the_Gamepad_API
@@ -210,6 +260,17 @@ class JoystickManager {
   private lastTimeGamepadStatesPolled = 0
   private previousGamepadState: Map<number, JoystickState> = new Map()
   private calibrationOptions: Map<JoystickModel, JoystickCalibration> = new Map()
+  private keyboardEnabled = false
+  private keyboardPressedKeys: Set<string> = new Set()
+  private keyboardLastKeydown: Map<string, number> = new Map()
+  private keyboardRepeating: Set<string> = new Set()
+  private keyboardAxes = [0, 0, 0, 0, 0]
+  private keyboardEmitTimer: ReturnType<typeof setInterval> | null = null
+  private keyboardLastTick = 0
+  private keyboardZeroReemitTicksLeft = 0
+  private keyboardKeyDownHandler: ((e: KeyboardEvent) => void) | null = null
+  private keyboardKeyUpHandler: ((e: KeyboardEvent) => void) | null = null
+  private keyboardBlurHandler: (() => void) | null = null
   /**
    * Singleton constructor
    */
@@ -260,6 +321,14 @@ class JoystickManager {
    */
   onJoystickConnectionUpdate(callback: CallbackJoystickConnectionEventType): void {
     this.callbacksJoystickConnection.push(callback)
+    // Seed the new subscriber with the current state. Connection events only fire on change, so a
+    // component that mounts after a device connected (e.g. the keyboard virtual joystick, or a
+    // gamepad connected earlier) would otherwise never learn about it and stay in a disconnected UI.
+    // Deferred to a macrotask so it never runs re-entrantly during the subscriber's own setup (which
+    // would abort a Pinia store mid-initialization when a device is already present).
+    if (this.joysticks.size > 0) {
+      setTimeout(() => callback(this.joysticks), 0)
+    }
   }
 
   /**
@@ -284,6 +353,10 @@ class JoystickManager {
    * @returns {JoystickModel} Joystick model
    */
   getModel(gamepadId: string): JoystickModel {
+    if (gamepadId === keyboardJoystickId) {
+      return JoystickModel.VirtualKeyboard
+    }
+
     const { vendor_id, product_id } = this.getVidPid(gamepadId)
 
     if (vendor_id == undefined || product_id == undefined) {
@@ -424,9 +497,24 @@ class JoystickManager {
    */
   private updateCalibrationSettings(): void {
     this.loadCalibrationSettings()
+    this.syncKeyboardJoystickFromSettings()
     setTimeout(() => {
       this.updateCalibrationSettings()
     }, 1000)
+  }
+
+  /**
+   * Enable/disable the keyboard joystick to match the persisted opt-in setting. Runs on the same
+   * periodic loop as calibration so the device activates on app boot (not only when the joystick
+   * configuration page is opened) and reflects the setting even without that view mounted.
+   */
+  private syncKeyboardJoystickFromSettings(): void {
+    // Enabled by default: absent setting (fresh install / cleared storage) means on, so the robot is
+    // drivable with no setup. Only an explicit `false` disables it.
+    const enabled = settingsManager.getKeyValue('cockpit-keyboard-joystick-enabled') !== false
+    if (enabled !== this.keyboardEnabled) {
+      this.setKeyboardJoystickEnabled(enabled)
+    }
   }
 
   /**
@@ -462,8 +550,10 @@ class JoystickManager {
       }
     }
 
-    // Remove gamepads that are not connected anymore
+    // Remove gamepads that are not connected anymore. The synthetic keyboard joystick is not part of
+    // navigator.getGamepads(), so it must be exempted or it would be culled on every poll.
     for (const gamepad of this.joysticks.values()) {
+      if (gamepad.index === keyboardJoystickIndex) continue
       if (!gamepadConnectionsState.map((g) => g?.index).includes(gamepad.index)) {
         this.joysticks.delete(gamepad.index)
         this.enabledJoysticks = this.enabledJoysticks.filter((index) => index !== gamepad.index)
@@ -593,6 +683,239 @@ class JoystickManager {
     for (const callback of this.callbacksJoystickConnection) {
       callback(this.joysticks)
     }
+  }
+
+  /**
+   * Whether the virtual keyboard joystick is currently enabled
+   * @returns {boolean}
+   */
+  isKeyboardJoystickEnabled(): boolean {
+    return this.keyboardEnabled
+  }
+
+  /**
+   * Enable or disable the virtual keyboard joystick. When enabled, arrow keys / WASD drive the
+   * standard-gamepad axes (left-stick Y for forward/back, right-stick X for yaw), letting operators
+   * fly manual control without a physical gamepad. The device appears as a normal standard joystick,
+   * so the existing mapping/calibration/forwarding pipeline treats it like any other controller.
+   * @param {boolean} enabled Whether the keyboard joystick should be active
+   */
+  setKeyboardJoystickEnabled(enabled: boolean): void {
+    if (enabled === this.keyboardEnabled) return
+    this.keyboardEnabled = enabled
+    enabled ? this.attachKeyboardJoystick() : this.detachKeyboardJoystick()
+  }
+
+  /**
+   * Build the synthetic Gamepad object representing the current keyboard axis state
+   * @returns {Gamepad} A standard-mapping gamepad snapshot
+   */
+  private buildKeyboardGamepad(): Gamepad {
+    return {
+      id: keyboardJoystickId,
+      index: keyboardJoystickIndex,
+      connected: true,
+      timestamp: performance.now(),
+      mapping: 'standard',
+      axes: [...this.keyboardAxes],
+      buttons: Array.from({ length: 18 }, () => ({ pressed: false, value: 0, touched: false })),
+      vibrationActuator: {
+        playEffect: async () => 'complete' as const,
+        reset: async () => 'complete' as const,
+      },
+    } as unknown as Gamepad
+  }
+
+  /**
+   * Register the keyboard device, attach key listeners, and start the ramp/emit loop
+   */
+  private attachKeyboardJoystick(): void {
+    this.clearKeyboardKeys()
+    this.keyboardAxes = [0, 0, 0, 0, 0]
+
+    this.keyboardKeyDownHandler = (e: KeyboardEvent) => {
+      const isStopKey = e.code === 'Space'
+      if (!isStopKey && !(e.code in keyboardAxisBindings)) return
+      // Ignore when typing in an input/textarea so keyboard driving never hijacks form entry.
+      const target = e.target as HTMLElement | null
+      if (target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))) return
+      e.preventDefault()
+      if (isStopKey) {
+        // Space is a hard stop: drop all held movement keys and snap axes to zero immediately,
+        // bypassing the ramp so the vehicle halts at once.
+        this.clearKeyboardKeys()
+        this.keyboardAxes = [0, 0, 0, 0, 0]
+        this.emitStateEvent({
+          index: keyboardJoystickIndex,
+          gamepad: this.buildKeyboardGamepad(),
+          calibratedState: this.buildCalibratedState([0, 0, 0, 0, 0], [], JoystickModel.VirtualKeyboard),
+        })
+        return
+      }
+      // A keydown for an already-pressed key is the OS auto-repeat — mark it so the stuck-key
+      // watchdog can safely release it once repeats stop.
+      if (this.keyboardPressedKeys.has(e.code)) this.keyboardRepeating.add(e.code)
+      this.keyboardPressedKeys.add(e.code)
+      this.keyboardLastKeydown.set(e.code, performance.now())
+    }
+    this.keyboardKeyUpHandler = (e: KeyboardEvent) => {
+      const wasPressed = this.keyboardPressedKeys.delete(e.code)
+      this.keyboardRepeating.delete(e.code)
+      this.keyboardLastKeydown.delete(e.code)
+      if (wasPressed) {
+        e.preventDefault()
+        // Snap released axes to zero and emit immediately — never wait for the next ramp tick.
+        // Under heavy main-thread load the interval can be delayed by seconds, which would leave
+        // the vehicle driving after the key is up. Releasing here makes the stop tick-independent.
+        this.tickKeyboardJoystick()
+      }
+    }
+    // Any loss of focus/visibility (alt-tab, clicking into the video, switching tabs) must stop the
+    // vehicle, matching gamepad safety — a keyup can be missed while unfocused.
+    this.keyboardBlurHandler = () => {
+      this.clearKeyboardKeys()
+      this.tickKeyboardJoystick()
+    }
+
+    // Capture phase so we always see the event before any focused element (e.g. the WebRTC video
+    // widget) can stopPropagation and swallow the keyup — a swallowed keyup is what latches a key on.
+    window.addEventListener('keydown', this.keyboardKeyDownHandler, { capture: true })
+    window.addEventListener('keyup', this.keyboardKeyUpHandler, { capture: true })
+    window.addEventListener('blur', this.keyboardBlurHandler)
+    document.addEventListener('visibilitychange', this.keyboardBlurHandler)
+
+    this.joysticks.set(keyboardJoystickIndex, this.buildKeyboardGamepad())
+    if (!this.enabledJoysticks.includes(keyboardJoystickIndex)) {
+      this.enabledJoysticks.push(keyboardJoystickIndex)
+    }
+    this.emitJoystickConnectionUpdate()
+
+    this.keyboardLastTick = performance.now()
+    this.keyboardEmitTimer = setInterval(() => this.tickKeyboardJoystick(), keyboardEmitIntervalMs)
+  }
+
+  /**
+   * Stop the keyboard device: remove listeners, zero the axes, and unregister it
+   */
+  private detachKeyboardJoystick(): void {
+    if (this.keyboardKeyDownHandler) window.removeEventListener('keydown', this.keyboardKeyDownHandler, { capture: true })
+    if (this.keyboardKeyUpHandler) window.removeEventListener('keyup', this.keyboardKeyUpHandler, { capture: true })
+    if (this.keyboardBlurHandler) {
+      window.removeEventListener('blur', this.keyboardBlurHandler)
+      document.removeEventListener('visibilitychange', this.keyboardBlurHandler)
+    }
+    this.keyboardKeyDownHandler = null
+    this.keyboardKeyUpHandler = null
+    this.keyboardBlurHandler = null
+
+    if (this.keyboardEmitTimer !== null) {
+      clearInterval(this.keyboardEmitTimer)
+      this.keyboardEmitTimer = null
+    }
+
+    this.clearKeyboardKeys()
+    this.keyboardAxes = [0, 0, 0, 0, 0]
+    // Emit one final zeroed state so consumers stop the vehicle before the device disappears.
+    this.emitStateEvent({
+      index: keyboardJoystickIndex,
+      gamepad: this.buildKeyboardGamepad(),
+      calibratedState: this.buildCalibratedState([0, 0, 0, 0, 0], [], JoystickModel.VirtualKeyboard),
+    })
+
+    this.joysticks.delete(keyboardJoystickIndex)
+    this.enabledJoysticks = this.enabledJoysticks.filter((index) => index !== keyboardJoystickIndex)
+    this.emitJoystickConnectionUpdate()
+  }
+
+  /**
+   * Clear all keyboard key-tracking state (pressed, repeat, and last-keydown timers)
+   */
+  private clearKeyboardKeys(): void {
+    this.keyboardPressedKeys.clear()
+    this.keyboardRepeating.clear()
+    this.keyboardLastKeydown.clear()
+  }
+
+  /**
+   * Release keys that are stuck: a key that had been auto-repeating but whose repeats have stopped
+   * without a keyup (missed/intercepted keyup) would otherwise hold the axis and keep the vehicle
+   * moving. Only keys that have actually repeated are eligible, so a fresh press awaiting its first
+   * repeat is never falsely released.
+   * @param {number} now Current timestamp (performance.now)
+   */
+  private releaseStuckKeyboardKeys(now: number): void {
+    for (const code of [...this.keyboardPressedKeys]) {
+      const last = this.keyboardLastKeydown.get(code) ?? 0
+      const threshold = this.keyboardRepeating.has(code) ? keyboardStuckKeyMs : keyboardStuckKeyInitialMs
+      if (now - last > threshold) {
+        this.keyboardPressedKeys.delete(code)
+        this.keyboardRepeating.delete(code)
+        this.keyboardLastKeydown.delete(code)
+      }
+    }
+  }
+
+  /**
+   * One ramp/emit tick: move each axis toward its target (held keys) and emit the state if changed
+   */
+  private tickKeyboardJoystick(): void {
+    const now = performance.now()
+    const dt = Math.min((now - this.keyboardLastTick) / 1000, 0.25)
+    this.keyboardLastTick = now
+
+    this.releaseStuckKeyboardKeys(now)
+
+    const targets = [0, 0, 0, 0, 0]
+    for (const code of this.keyboardPressedKeys) {
+      const [axis, dir] = keyboardAxisBindings[code]
+      targets[axis] += dir
+    }
+    targets.forEach((t, i) => (targets[i] = Math.max(-1, Math.min(1, t))))
+
+    let changed = false
+    const next = this.keyboardAxes.map((cur, i) => {
+      const target = targets[i]
+      // Snap straight to zero when the key is released: ramping down adds to the perceived
+      // stopping distance on top of the network round-trip. Ramp only when accelerating toward a
+      // held direction, for a smooth start.
+      let value: number
+      if (target === 0) {
+        value = 0
+      } else {
+        const step = keyboardRampUpPerSec * dt
+        let ramped = Math.abs(target - cur) <= step ? target : cur + Math.sign(target - cur) * step
+        // Breakaway: while accelerating toward the target's direction, never sit below the start
+        // floor — jump straight to it so the vehicle moves immediately, then ramp on from there.
+        if (Math.sign(ramped) === Math.sign(target) && Math.abs(ramped) < keyboardStartFloor) {
+          ramped = Math.sign(target) * Math.min(keyboardStartFloor, Math.abs(target))
+        }
+        value = ramped
+      }
+      if (value !== cur) changed = true
+      return value
+    })
+    this.keyboardAxes = next
+
+    const anyKeyHeld = this.keyboardPressedKeys.size > 0
+    const allZero = next.every((v) => v === 0)
+
+    // Arm the zero re-emit window the moment we settle to zero (i.e. on release).
+    if (changed && allZero) this.keyboardZeroReemitTicksLeft = keyboardZeroReemitTickCount
+
+    // Emit when the value changed, whenever a key is held (continuously re-assert so a dropped emit
+    // can't leave a stale command driving the vehicle), or during the post-release zero re-emit window.
+    let shouldEmit = changed || anyKeyHeld
+    if (!shouldEmit && allZero && this.keyboardZeroReemitTicksLeft > 0) {
+      this.keyboardZeroReemitTicksLeft -= 1
+      shouldEmit = true
+    }
+    if (!shouldEmit) return
+
+    this.emitStateEvent({
+      index: keyboardJoystickIndex,
+      gamepad: this.buildKeyboardGamepad(),
+      calibratedState: this.buildCalibratedState(next, [], JoystickModel.VirtualKeyboard),
+    })
   }
 
   /**

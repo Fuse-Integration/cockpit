@@ -153,8 +153,33 @@
                   ({{ ignoredStreamExternalIds.length }} ignored)
                 </span>
               </div>
-              <div v-if="isElectron()" class="mt-4 mr-2 mb-2 w-[95%]">
-                <div class="text-sm text-gray-300 mb-2">Add direct RTSP stream (Standalone)</div>
+              <div v-if="!isElectron()" class="mt-4 mr-2 mb-2 w-[95%]">
+                <div class="text-sm text-gray-300 mb-2">External go2rtc server</div>
+                <div class="text-xs text-gray-400 mb-2">
+                  Allows direct RTSP stream consumption in the web build by delegating RTSP-to-WebRTC conversion to a
+                  remotely hosted go2rtc server (e.g. one running next to your media relay). Use an https:// URL when
+                  Cockpit is served over https.
+                </div>
+                <div class="flex items-end gap-2 w-full">
+                  <v-text-field
+                    v-model="videoStore.externalGo2RtcServer.data"
+                    label="go2rtc base URL (e.g. https://host/go2rtc)"
+                    density="compact"
+                    variant="outlined"
+                    class="flex-1 min-w-0"
+                    hide-details
+                  />
+                  <v-checkbox
+                    v-model="videoStore.externalGo2RtcServer.enabled"
+                    label="Enable"
+                    density="compact"
+                    class="shrink-0"
+                    hide-details
+                  />
+                </div>
+              </div>
+              <div v-if="videoStore.rtspStreamsAvailable" class="mt-4 mr-2 mb-2 w-[95%]">
+                <div class="text-sm text-gray-300 mb-2">Add direct RTSP stream</div>
                 <div class="flex items-end gap-2 w-full">
                   <v-text-field
                     v-model="rtspUrlInput"
@@ -598,7 +623,7 @@ const getStreamDisplayInfo = (
 const getStreamStatus = (item: { externalId: string; protocol?: string }): { status: 'Available' | 'Unavailable' | 'Offline' | 'Unknown'; icon: string; color: string } => {
   const protocol = item.protocol ?? videoStore.getStreamProtocol(item.externalId)
   if (protocol === 'rtsp') {
-    return isElectron()
+    return videoStore.rtspStreamsAvailable
       ? { status: 'Available', icon: 'mdi-check-circle', color: '#297e1944' }
       : { status: 'Unavailable', icon: 'mdi-close-circle', color: '#ff000044' }
   }

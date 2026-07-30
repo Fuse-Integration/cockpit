@@ -19,6 +19,9 @@ export const defaultMavProfileHash = '2309ffda-896a-449d-a171-7b7fdf80bc95'
 export const defaultProfileVehicleCorrespondency = {
   [MavType.MAV_TYPE_SUBMARINE]: defaultRovProfileHash,
   [MavType.MAV_TYPE_SURFACE_BOAT]: defaultBoatProfileHash,
+  // A ground rover is a surface, steering-based vehicle like a boat (no depth/altitude), so the
+  // boat profile — with its View Selector and Armer Button — is the closest sensible default.
+  [MavType.MAV_TYPE_GROUND_ROVER]: defaultBoatProfileHash,
   [MavType.MAV_TYPE_QUADROTOR]: defaultMavProfileHash,
 }
 
@@ -653,6 +656,93 @@ export const widgetProfiles: Profile[] = [
     hash: defaultBoatProfileHash,
     views: [
       {
+        hash: 'a3e1c9d4-2b7f-4e60-9c15-6f0a8b1d2e34',
+        name: 'HUD View',
+        showBottomBarOnBoot: true,
+        visible: true,
+        widgets: [
+          {
+            hash: 'e7b2f10a-4c93-4d21-8a6e-1b5c9d0f3a72',
+            name: 'VideoPlayer',
+            component: WidgetType.VideoPlayer,
+            position: { x: 0, y: 0 },
+            size: { width: 1, height: 1 },
+            options: {
+              videoFitStyle: 'cover',
+              flipHorizontally: false,
+              flipVertically: false,
+            },
+          },
+          {
+            hash: 'c4d8a251-6f70-4b39-9e12-8a3b7c1d5e46',
+            name: 'CompassHUD',
+            component: WidgetType.CompassHUD,
+            position: { x: 0.22, y: 0.87 },
+            size: { width: 0.56, height: 0.062 },
+            options: {
+              showYawValue: true,
+              hudColor: '#FFFFFF',
+              useNegativeRange: false,
+            },
+          },
+        ],
+        miniWidgetContainers: [
+          {
+            name: 'Bottom-left container',
+            widgets: [
+              {
+                component: MiniWidgetType.ViewSelector,
+                name: 'ViewSelector',
+                options: {},
+                hash: 'b8f3c0d1-2e74-4a95-8c16-7d0a9b2f4e58',
+              },
+            ],
+          },
+          {
+            name: 'Bottom-center container',
+            widgets: [
+              {
+                component: MiniWidgetType.ArmerButton,
+                name: 'ArmerButton',
+                options: {},
+                hash: 'd9a4e1f2-3b85-4c06-9d27-8e1b0c3f5a69',
+              },
+              {
+                component: MiniWidgetType.VeryGenericIndicator,
+                name: 'Speed (GPS)',
+                options: {
+                  displayName: 'Speed (GPS)',
+                  variableName: 'VFR_HUD/groundspeed',
+                  iconName: 'mdi-car-speed-limiter',
+                  variableUnit: 'm/s',
+                  variableMultiplier: 1,
+                  decimalPlaces: 1,
+                  widgetWidth: 160,
+                },
+                hash: 'e0b5f2a3-4c96-4d17-8e38-9f2c1d4a6b7a',
+              },
+            ],
+          },
+          {
+            name: 'Bottom-right container',
+            widgets: [
+              {
+                component: MiniWidgetType.JoystickCommIndicator,
+                name: 'JoystickCommIndicator',
+                options: {},
+                hash: 'f1c6a3b4-5d07-4e28-9f49-0a3d2e5b7c8b',
+              },
+              {
+                component: MiniWidgetType.ModeSelector,
+                name: 'ModeSelector',
+                options: {},
+                hash: 'a2d7b4c5-6e18-4f39-8a50-1b4e3f6c8d9c',
+              },
+            ],
+          },
+        ],
+      },
+      {
         hash: 'f8a76470-9122-44f7-97f7-4555a59ee9c4',
         name: 'Map view',
         showBottomBarOnBoot: true,
@@ -745,6 +835,12 @@ export const widgetProfiles: Profile[] = [
           {
             name: 'Bottom-right container',
             widgets: [
+              {
+                component: MiniWidgetType.JoystickCommIndicator,
+                name: 'JoystickCommIndicator',
+                options: {},
+                hash: 'b1f4c0a2-6d3e-4c7a-9f2b-2e8a1d5c7f90',
+              },
               {
                 component: MiniWidgetType.ModeSelector,
                 name: 'ModeSelector',

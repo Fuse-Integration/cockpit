@@ -20,6 +20,10 @@ export const defaultMavMappingHash = 'dd654387-18fc-4674-89a6-4dc4d0bc8240'
 export const defaultProtocolMappingVehicleCorrespondency = {
   [MavType.MAV_TYPE_SUBMARINE]: defaultRovMappingHash,
   [MavType.MAV_TYPE_SURFACE_BOAT]: defaultBoatMappingHash,
+  // A ground rover reuses the boat mapping (surface, steering-based; the boat mapping already
+  // binds Rover modes and arm/disarm). This makes a fresh Cockpit auto-import drive axes for the
+  // rover — including the keyboard virtual joystick, whose axes map to the same A1/A2.
+  [MavType.MAV_TYPE_GROUND_ROVER]: defaultBoatMappingHash,
   [MavType.MAV_TYPE_QUADROTOR]: defaultMavMappingHash,
 }
 
@@ -104,6 +108,7 @@ export const cockpitStandardToProtocols: JoystickProtocolActionsMapping[] = [
       [JoystickAxis.A1]: { action: joystickInputAxes.axis_x, min: +1000, max: -1000 },
       [JoystickAxis.A2]: { action: joystickInputAxes.axis_r, min: -1000, max: +1000 },
       [JoystickAxis.A3]: { action: joystickInputAxes.axis_z, min: +1000, max: -1000 },
+      [JoystickAxis.A4]: { action: joystickInputAxes.axis_s, min: -1000, max: +1000 },
     },
     buttonsCorrespondencies: {
       [CockpitModifierKeyOption.regular]: {
